@@ -14,12 +14,12 @@ const int RPM_SENSOR_PIN = 2;  // Interrupt sense input
 const long SERIAL_BAUD = 115200;
 const unsigned long UPDATE_THROTTLE = 500;  // minimum 0.5 sec between speed calcs
 const unsigned long IDLE_TIMEOUT = 5000;  // milliseconds to wait for new measurement
-const unsigned int UPDATE_COUNT = 5;  // minimum revolutions to use for calculations
+const unsigned int UPDATE_COUNT = 5;  // minimum transistions to use for calculations
 const unsigned int TICKS_PER_REV = 1;  // number of transitions per revolution
 
-// revolutionCount needs to stay global, AND volatile, since the interrupt handler
+// sensorTransitions needs to stay global, AND volatile, since the interrupt handler
 // updates it outside of the normal code flow
-volatile unsigned int revolutionCount;
+volatile unsigned int sensorTransitions;
 
 void setup()
 {
@@ -33,9 +33,9 @@ void setup()
   Serial.println(F("  WCRS"));
 
   // Call Interrupt handler function on each LOW to HIGH transition
-  attachInterrupt(digitalPinToInterrupt(RPM_SENSOR_PIN), revolutionCounter, RISING);
+  attachInterrupt(digitalPinToInterrupt(RPM_SENSOR_PIN), transitionCounter, RISING);
 
-  revolutionCount = 0;  // First initialization to start measurements
+  sensorTransitions = 0;  // First initialization to start measurements
 }
 
 void loop()
@@ -49,7 +49,7 @@ void loop()
   unsigned long throttleTime = currtime - measurementReported;
   unsigned int measuredRPM;
 
-  if((revolutionCount >= UPDATE_COUNT) & (throttleTime >= UPDATE_THROTTLE)) {
+  if((sensorTransitions >= UPDATE_COUNT) & (throttleTime >= UPDATE_THROTTLE)) {
     // it´s time to report a new (raw) measurement
     measuredRPM = reportLatestRPM();  // calcuate and report the current RPM
     if(measuredRPM > maximumRPM) {
@@ -75,14 +75,14 @@ void loop()
 
 
 /**
- * revolutionCounter Interrupt handler
+ * transitionCounter Interrupt handler
  *
  * Every time the sensor goes from LOW to HIGH, this function will be called
  */
-void revolutionCounter()
+void transitionCounter()
 {
-  revolutionCount++;  // Increment the number of revolutions detected
-} // ./ revolutionCounter()
+  sensorTransitions++;  // Increment the number of revolutions detected
+} // ./ transitionCounter()
 
 
 /**
@@ -109,11 +109,11 @@ unsigned long reportLatestRPM()
   */
   // Calculate the RPM using the time needed for the number of revolutions seen
   static unsigned int measurementStart = 0;  // time latest measurement was started
-  unsigned int calculatedRPM = 60 * 1000 * revolutionCount / (TICKS_PER_REV *
+  unsigned int calculatedRPM = 60 * 1000 * sensorTransitions / (TICKS_PER_REV *
     (millis() - measurementStart));  // The calculation result is unlikely to
     // need a long, but intermediate calculations might.
   measurementStart = millis();  // Start a new measurement
-  revolutionCount = 0;
+  sensorTransitions = 0;
 
   showRawRPM(calculatedRPM);
   return calculatedRPM;
@@ -155,7 +155,7 @@ void showActive()
 {
   static int measureStatus = LOW;  // Status LED state (value); toggled to show working
   static unsigned int previousCounted = 0;  // most recent recorded sensor event count
-  unsigned int countedRevolutions = revolutionCount;  // stable temporary copy of volatile value
+  unsigned int countedRevolutions = sensorTransitions;  // stable temporary copy of volatile value
   if(countedRevolutions != previousCounted) {  // count has changed since previous loop
     if (measureStatus == LOW) {  // toggle the status LED to show something is happening
       measureStatus = HIGH;
