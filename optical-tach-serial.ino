@@ -16,15 +16,10 @@ const unsigned long UPDATE_THROTTLE = 500;  // minimum 0.5 sec between speed cal
 const unsigned long IDLE_TIMEOUT = 5000;  // milliseconds to wait for new measurement
 const unsigned int UPDATE_COUNT = 5;  // minimum revolutions to use for calculations
 const unsigned int TICKS_PER_REV = 1;  // number of transitions per revolution
-volatile unsigned int revolutionCount;    // volatile (updated by interrupt handler)
-unsigned int previousCounted;  // most recent recorded sensor event count
-unsigned long int maximumRPM;  // Maximum RPM measurement
-unsigned long measurementStart;  // time latest measurement was started
-unsigned long measurmentReported;  // time most recent measurement was reported
-unsigned long idleStart = 0;  // previous time a measurement was recorded
-int measureStatus = LOW;       // Status LED state (value); toggled to show working
-int RPMprevLen = 0;     // Previous RPM value displayed length
-bool isIdle = true;  // Flag to prevent multiple reports of the same maximum
+
+// revolutionCount needs to stay global, AND volatile, since the interrupt handler
+// updates it outside of the normal code flow
+volatile unsigned int revolutionCount;
 
 void setup()
 {
@@ -41,25 +36,35 @@ void setup()
   attachInterrupt(digitalPinToInterrupt(RPM_SENSOR_PIN), revolutionCounter, RISING);
 
   revolutionCount = 0;  // First initialization to start measurements
-  measurementStart = 0;
-  previousCounted = 0;
 }
 
 void loop()
 {
+  static unsigned long measurementReported = 0;  // time most recent measurement was reported
+  static unsigned long idleStart = 0;  // previous time a measurement was recorded
+  static unsigned int maximumRPM = 0;  // Maximum RPM measurement seen
+  static bool isIdle = true;  // Flag to prevent multiple reports of the same maximum
   unsigned long currtime = millis(); // the current time
   unsigned long idletime = currtime - idleStart;  // time since last measurement
-  unsigned long throttleTime = currtime - measurmentReported;
+  unsigned long throttleTime = currtime - measurementReported;
+  unsigned int measuredRPM;
 
   if((revolutionCount >= UPDATE_COUNT) & (throttleTime >= UPDATE_THROTTLE)) {
     // it´s time to report a new (raw) measurement
-    reportLatestRPM();
+    measuredRPM = reportLatestRPM();  // calcuate and report the current RPM
+    if(measuredRPM > maximumRPM) {
+      maximumRPM = measuredRPM;   //  Track the maximum RPM reading seen
+    }
+    // maximumRPM = max(measuredRPM, maximumRPM);
+    // maximumRPM = max(reportLatestRPM(), maximumRPM);
+
+    measurementReported = millis();  // marker to prevent continious updates
     idleStart = currtime;  // Just had a new reading; reset start idle interval to now
     isIdle = false;
   }
 
   if(!isIdle & (idletime > IDLE_TIMEOUT)) {  // There has been no new reading for awhile
-    showMaxRPM();  // Show the maximum RPM
+    showMaxRPM(maximumRPM);  // Show the maximum RPM
     idleStart = currtime;
     isIdle = true;
     // TODO: prevent repeated maximum reports until have a new raw measurement
@@ -82,8 +87,10 @@ void revolutionCounter()
 
 /**
  * calculate and report the current RPM
+ *
+ * @returns the maximum RPM value seen so far
  */
-void reportLatestRPM()
+unsigned long reportLatestRPM()
 {
   /* RPM: revolutions per minute:
    * rpm
@@ -99,19 +106,17 @@ void reportLatestRPM()
    * rpm = (60000 * (revolutions / TICKS_PER_REV)) / (millis() - measurementStart)
    * rpm = (60000 * revolutions) / TICKS_PER_REV)) / (millis() - measurementStart)
    * rpm = (60000 * revolutions) / (TICKS_PER_REV * (millis() - measurementStart))
-   *
-   * Something is wrong in the calculation here
   */
   // Calculate the RPM using the time needed for the number of revolutions seen
-  unsigned long int measuredRPM = 60 * 1000 * revolutionCount / (TICKS_PER_REV * (millis() - measurementStart));
+  static unsigned int measurementStart = 0;  // time latest measurement was started
+  unsigned int calculatedRPM = 60 * 1000 * revolutionCount / (TICKS_PER_REV *
+    (millis() - measurementStart));  // The calculation result is unlikely to
+    // need a long, but intermediate calculations might.
   measurementStart = millis();  // Start a new measurement
   revolutionCount = 0;
 
-  if(measuredRPM > maximumRPM) {
-    maximumRPM = measuredRPM;   //  Track the maximum RPM reading seen
-  }
-
-  showRawRPM(measuredRPM);
+  showRawRPM(calculatedRPM);
+  return calculatedRPM;
 }
 
 
@@ -119,10 +124,10 @@ void reportLatestRPM()
  *
  * Display the maximum RPM value seen so far
  */
-void showMaxRPM()
+void showMaxRPM(unsigned long value)
 {
   Serial.println(F("\nMaximum RPM"));
-  Serial.print(maximumRPM, DEC);
+  Serial.print(value, DEC);
   Serial.println(F(" RPM\n\n Idle state\Ready to measure"));
 }
 
@@ -138,7 +143,6 @@ void showRawRPM(int rpmValue)
   Serial.print(F("Measuring "));
   Serial.print(rpmValue, DEC);
   Serial.println(F(" rpm"));
-  measurmentReported = millis();  // marker to prevent continious updates
 }
 
 
@@ -149,7 +153,9 @@ void showRawRPM(int rpmValue)
  */
 void showActive()
 {
-  unsigned int countedRevolutions = revolutionCount;
+  static int measureStatus = LOW;  // Status LED state (value); toggled to show working
+  static unsigned int previousCounted = 0;  // most recent recorded sensor event count
+  unsigned int countedRevolutions = revolutionCount;  // stable temporary copy of volatile value
   if(countedRevolutions != previousCounted) {  // count has changed since previous loop
     if (measureStatus == LOW) {  // toggle the status LED to show something is happening
       measureStatus = HIGH;
